@@ -111,8 +111,8 @@ class PathManager:
             start_pose = PoseStamped()
             start_pose.header.frame_id = frame_id
             start_pose.pose.position.x = self.robot_position[0]
-            start_pose.pose.position.y = self.robot_position[1]
-            start_pose.pose.position.z = 0.0
+            start_pose.pose.position.y = 0.0
+            start_pose.pose.position.z = self.robot_position[1]
             start_pose.pose.orientation.w = 1.0
             self.path.poses.append(start_pose)
             rospy.loginfo(f"已设定路径起点为当前位置: x={self.robot_position[0]:.2f}, y={self.robot_position[1]:.2f}")
@@ -123,8 +123,8 @@ class PathManager:
         goal_pose.header.frame_id = frame_id
         goal_pose.header.stamp = rospy.Time.now()
         goal_pose.pose.position.x = x
-        goal_pose.pose.position.y = y
-        goal_pose.pose.position.z = 0.0
+        goal_pose.pose.position.z = y
+        goal_pose.pose.position.y = 0.0
         goal_pose.pose.orientation.w = 1.0
         self.path.poses.append(goal_pose)
         self.path.header.stamp = rospy.Time.now()
@@ -166,7 +166,7 @@ class PathManager:
         """处理里程计消息"""
         # 更新机器人位置
         raw_x = msg.pose.pose.position.x
-        raw_y = msg.pose.pose.position.y
+        raw_y = msg.pose.pose.position.z
         transformed_x = raw_x
         transformed_y = raw_y
         self.robot_position = (transformed_x, transformed_y)        
@@ -174,8 +174,8 @@ class PathManager:
         # 更新偏航角
         quat = (
             msg.pose.pose.orientation.x,
+            -msg.pose.pose.orientation.z,
             msg.pose.pose.orientation.y,
-            msg.pose.pose.orientation.z,
             msg.pose.pose.orientation.w
         )
         _, _, self.robot_yaw = tf_trans.euler_from_quaternion(quat)
@@ -198,8 +198,8 @@ class PathManager:
             pose.header.frame_id = "map"
             pose.header.stamp = rospy.Time.now()
             pose.pose.position.x = current_pos[0]
-            pose.pose.position.y = current_pos[1]
-            pose.pose.position.z = 0.0
+            pose.pose.position.z = current_pos[1]
+            pose.pose.position.y = 0.0
             pose.pose.orientation.w = 1.0
             self.path.poses.append(pose)
             self.last_recorded_point = current_pos
@@ -283,7 +283,8 @@ class PathManager:
             # 计算航向偏差（机器人当前朝向与目标方向的角度差）            
             goal_heading_error = self.angle_diff(goal_heading, self.robot_yaw)
             heading_error_deg = math.degrees(goal_heading_error)
-            
+            if heading_error_deg < -180:
+                heading_error_deg += 360
             rospy.loginfo_throttle(0.1,
                 f"当前位置: ({self.robot_position[0]:.2f}, {self.robot_position[1]:.2f}) | "
                 f"目标点: ({goal_pos.x:.2f}, {goal_pos.y:.2f}) | "
@@ -337,8 +338,8 @@ class PathManager:
                 pose.header.frame_id = "map"
                 pose.header.stamp = rospy.Time.now()
                 pose.pose.position.x = x_new[i]
-                pose.pose.position.y = y_new[i]
-                pose.pose.position.z = 0.0
+                pose.pose.position.z = y_new[i]
+                pose.pose.position.y = 0.0
                 pose.pose.orientation.w = 1.0
                 self.smoothed_path.poses.append(pose)
             
@@ -407,27 +408,33 @@ class PathManager:
         """保存路径到文件"""
         try:
             filepath = os.path.join(self.save_dir, filename)
+          
+        # 将元组转换为列表以便YAML序列化
+            converted_boundaries = {}
+            if self.region_boundaries:
+               for k, v in self.region_boundaries.items():
+                  converted_boundaries[k] = list(v)  # 元组转列表
+        
             path_data = {
                 "frame_id": "map",
-                "points": [{"x": p.pose.position.x, "y": p.pose.position.y} for p in self.path.poses],
-                "smoothed_points": [{"x": p.pose.position.x, "y": p.pose.position.y} for p in self.smoothed_path.poses],
+                "points": [{"x": p.pose.position.x, "y": p.pose.position.z} for p in self.path.poses],
+                "smoothed_points": [{"x": p.pose.position.x, "y": p.pose.position.z} for p in self.smoothed_path.poses],
                 "lookahead_distance": self.lookahead_distance,
                 "min_distance": self.min_distance,
                 "smooth_factor": self.smooth_factor,
                 "goal_threshold": self.goal_threshold,
-                "region_boundaries": self.region_boundaries,
+                "region_boundaries": converted_boundaries,  # 使用转换后的字典
                 "region_index_map": self.region_index_map
-            }
-            
+        }
+        
             with open(filepath, 'w') as f:
                 yaml.dump(path_data, f)
-            
+        
             rospy.loginfo(f"路径已保存到: {filepath}")
             return filepath
         except Exception as e:
             rospy.logerr(f"保存路径失败: {str(e)}")
             return None
-
     def load_path_from_file(self, filename="path.yaml"):
         """从文件加载路径"""
         try:
@@ -435,38 +442,38 @@ class PathManager:
             if not os.path.exists(filepath):
                 rospy.logerr(f"路径文件不存在: {filepath}")
                 return False 
-                
+            
             with open(filepath, 'r') as f:
                 path_data = yaml.safe_load(f)
-            
-            # 重置路径
+        
+        # 重置路径
             self.path = Path()
             self.path.header.frame_id = "map"
             self.smoothed_path = Path()
             self.smoothed_path.header.frame_id = "map"
-            
-            # 加载原始路径点
+        
+        # 加载原始路径点
             for point in path_data["points"]:
                 pose = PoseStamped()
                 pose.header.frame_id = "map"
                 pose.pose.position.x = point["x"]
-                pose.pose.position.y = point["y"]
-                pose.pose.position.z = 0.0
+                pose.pose.position.z = point["y"]
+                pose.pose.position.y = 0.0
                 pose.pose.orientation.w = 1.0
                 self.path.poses.append(pose)
-            
-            # 加载平滑路径点
+        
+        # 加载平滑路径点
             if "smoothed_points" in path_data:
                 for point in path_data["smoothed_points"]:
                     pose = PoseStamped()
                     pose.header.frame_id = "map"
                     pose.pose.position.x = point["x"]
-                    pose.pose.position.y = point["y"]
-                    pose.pose.position.z = 0.0
+                    pose.pose.position.z = point["y"]
+                    pose.pose.position.y = 0.0
                     pose.pose.orientation.w = 1.0
                     self.smoothed_path.poses.append(pose)
-            
-            # 加载参数
+        
+        # 加载参数
             if "lookahead_distance" in path_data:
                 self.lookahead_distance = path_data["lookahead_distance"]
             if "min_distance" in path_data:
@@ -475,34 +482,41 @@ class PathManager:
                 self.smooth_factor = path_data["smooth_factor"]
             if "goal_threshold" in path_data:
                 self.goal_threshold = path_data["goal_threshold"]
+            
+        # 处理区域边界（列表转元组）
             if "region_boundaries" in path_data:
-                self.region_boundaries = path_data["region_boundaries"]
+                converted_boundaries = {}
+                for region_name, bounds in path_data["region_boundaries"].items():
+                    converted_boundaries[region_name] = tuple(bounds)  # 列表转元组
+                self.region_boundaries = converted_boundaries
+            
             if "region_index_map" in path_data:
                 self.region_index_map = path_data["region_index_map"]
-            
-            # 重置目标点索引
+        
+        # 重置目标点索引
             self.current_goal_index = 0
-            
-            # 设置最终目标点
+        
+        # 设置最终目标点
             if self.path.poses:
                 last_point = self.path.poses[-1].pose.position
                 self.goal_position = (last_point.x, last_point.y)
                 rospy.loginfo(f"设置目标点为: ({last_point.x:.2f}, {last_point.y:.2f})")
-            
-            # 发布路径
+        
+        # 发布路径
             self.path.header.stamp = rospy.Time.now()
             self.raw_path_pub.publish(self.path)
-            
+        
             if self.smoothed_path.poses:
                 self.smoothed_path.header.stamp = rospy.Time.now()
                 self.smooth_path_pub.publish(self.smoothed_path)
-            
+        
             rospy.loginfo(f"从 {filepath} 加载了 {len(self.path.poses)} 个原始点和 {len(self.smoothed_path.poses)} 个平滑点")
             self.visualize_path()
             return True
         except Exception as e:
             rospy.logerr(f"加载路径失败: {str(e)}")
             return False
+    
 
     def handle_save_request(self, req):
         try:

@@ -46,13 +46,14 @@
 
   <node pkg="fast_lio_sam" type="path_record.py" name="path_record" output="screen">
     <!-- 运行模式: click(点击模式)或record(记录模式) rosservice call /add_point "x: 0.0 y: 6.0"-->
-    <param name="mode" value="record"/>
+    <param name="mode" value="click"/>
     <!-- 是否自动加载路径 -->
     <param name="auto_load" value="false" />
     <!-- 记录模式下的最小记录距离 (米) -->
     <param name="min_distance" value="0.2" />
     <!-- 路径平滑因子 -->
     <param name="smooth_factor" value="10.0" />
+    <param name="goal_threshold" value="0.0"/>
     <!-- 里程计话题重映射 -->
     <remap from="/Odometry" to="/Odometry" />
   </node>
