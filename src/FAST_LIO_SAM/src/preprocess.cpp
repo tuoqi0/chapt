@@ -223,13 +223,13 @@ void Preprocess::avia_handler(const livox_ros_driver2::CustomMsg::ConstPtr &msg)
   
   // 计算前方30度范围内的最近点
   for (const auto& pt : cloud_filtered->points) {
-    // 计算点在XY平面的角度（相对于正前方）
-    float angle = std::atan2(pt.y, pt.x) * 180.0 / M_PI;
+    // 计算点在XZ平面的角度（相对于正前方）
+    float angle = std::atan2(pt.x, pt.z) * 180.0 / M_PI;
     
     // 只考虑前方30度范围内且在前方的点
     if (std::abs(angle) <= 30.0 && pt.x > 0) {
-      // 计算点到原点的距离（只考虑XY平面，忽略高度）
-      float distance = std::sqrt(pt.x * pt.x + pt.y * pt.y);
+      // 计算点到原点的距离（只考虑XZ平面，忽略高度）
+      float distance = std::sqrt(pt.x * pt.x + pt.z * pt.z);
       
       // 更新最小距离
       if (distance < min_distance) {
@@ -241,7 +241,7 @@ void Preprocess::avia_handler(const livox_ros_driver2::CustomMsg::ConstPtr &msg)
   // 创建并发布距离消息
   std_msgs::Float32 dist_msg;
   if (min_distance < std::numeric_limits<float>::max()) {
-    ROS_INFO_STREAM_THROTTLE(1.0, "distance" << min_distance << " meter");
+    ROS_INFO_STREAM_THROTTLE(0.1, "distance" << min_distance << " meter");
     dist_msg.data = min_distance;
   } else {
     ROS_INFO_STREAM_THROTTLE(1.0, "前方无障碍物");

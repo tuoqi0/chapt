@@ -1639,12 +1639,12 @@ void publish_map(const ros::Publisher &pubLaserCloudMap)
 template <typename T>
 void set_posestamp(T &out)
 {
-    out.pose.position.x = state_point.pos(2);
+    out.pose.position.x = state_point.pos(0);
     out.pose.position.y = state_point.pos(1);
-    out.pose.position.z = state_point.pos(0);
-    out.pose.orientation.x = geoQuat.z;
-    out.pose.orientation.y = -geoQuat.y;
-    out.pose.orientation.z = geoQuat.x;
+    out.pose.position.z = state_point.pos(2);
+    out.pose.orientation.x = geoQuat.x;
+    out.pose.orientation.y = geoQuat.y; 
+    out.pose.orientation.z = geoQuat.z;
     out.pose.orientation.w = geoQuat.w;
 }
 // 添加初始化位姿回调函数

@@ -38,8 +38,7 @@ sleep 2
 
 # 添加目标点
 echo "添加目标点 (0.0, 40.0) ..."
-rosservice call /add_point "x: 0.0
-y: 40.0"
+rosservice call /load_path
 
 # 保持脚本运行并显示状态
 echo ""
