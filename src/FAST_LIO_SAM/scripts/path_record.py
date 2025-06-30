@@ -52,7 +52,7 @@ class PathManager:
         self.toggle_mode_service = rospy.Service('/toggle_mode', SetBool, self.handle_toggle_mode)
         
         # 保存路径目录
-        self.save_dir = os.path.join(os.path.expanduser("/home/toe/"), "saved_paths")
+        self.save_dir = os.path.join(os.path.expanduser("/home/tuo/"), "saved_paths")
         os.makedirs(self.save_dir, exist_ok=True)
         
         # 状态变量
@@ -69,7 +69,9 @@ class PathManager:
         self.region_boundaries = {
             "竖杆":  (0.0, 7.0),
             "斜坡":  (10, 13.5),
-            "断桥":  (16.0, 19.8),
+            "断桥":  (16.0, 17.3),
+            "断桥特殊":  (17.3, 18.6),
+            "断桥2": (18.6, 19.8),  # 第二个断桥区域
             "高墙":  (22.0, 24.1),
             "沙坑":  (27.1, 30.1),
             "匍匐架":(33.0, 36.1)
@@ -80,9 +82,11 @@ class PathManager:
             "竖杆": 1,
             "斜坡": 2,
             "断桥": 3,
-            "高墙": 4,
-            "沙坑": 5,
-            "匍匐架": 6
+            "断桥特殊": 4,  # 特殊处理的断桥区域
+            "断桥2": 5,  # 第二个断桥区域
+            "高墙": 6,
+            "沙坑": 7,
+            "匍匐架": 8
         }
         
         # 自动加载路径
@@ -244,7 +248,7 @@ class PathManager:
             distance_to_goal = math.hypot(goal_dx, goal_dy)
             
             # 如果接近当前目标点，切换到下一个目标点
-            if self.current_region_index != 3:
+            if self.current_region_index != 4:
                 if goal_dx < 0.1 and abs(goal_dy) < 0.1:
                     if self.current_goal_index < len(self.path.poses) - 1:
                         self.current_goal_index += 1
@@ -302,7 +306,7 @@ class PathManager:
             goal_heading = math.atan2(goal_dy, goal_dx)
             
             # 计算航向偏差（机器人当前朝向与目标方向的角度差）  
-            if self.current_region_index != 6:  # 匍匐架区域特殊处理
+            if self.current_region_index != 8:  # 匍匐架区域特殊处理
 
                 goal_heading_error = self.angle_diff(self.robot_yaw, 0.0)
                 heading_error_deg = math.degrees(goal_heading_error)
