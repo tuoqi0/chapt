@@ -1660,8 +1660,8 @@ void initialPoseCallback(const geometry_msgs::PoseWithCovarianceStamped::ConstPt
 
 void publish_odometry(const ros::Publisher &pubOdomAftMapped)
 {
-    odomAftMapped.header.frame_id = "map";
-    odomAftMapped.child_frame_id = "camera_init";
+    odomAftMapped.header.frame_id = "camera_init";
+    odomAftMapped.child_frame_id = "base_link";
     odomAftMapped.header.stamp = ros::Time().fromSec(lidar_end_time);
     // 将 yaw_angle 转换为弧度
     double yaw_rad = yaw_angle * M_PI / 180.0;
@@ -1716,10 +1716,14 @@ void publish_odometry(const ros::Publisher &pubOdomAftMapped)
     q.setX(odomAftMapped.pose.pose.orientation.x);
     q.setY(odomAftMapped.pose.pose.orientation.y);
     q.setZ(odomAftMapped.pose.pose.orientation.z);
+    yaw_angle = tf::getYaw(q); // 获取当前的 yaw 角度
     transform.setRotation(q);
-
+     ROS_INFO("Publishing odometry: x=%.2f, y=%.2f, yaw=%.2f",
+             odomAftMapped.pose.pose.position.z,
+             odomAftMapped.pose.pose.position.x,
+             yaw_angle);
     // 正确发布 TF: map → camera_init
-    br.sendTransform(tf::StampedTransform(transform, odomAftMapped.header.stamp, "map", "camera_init"));
+    br.sendTransform(tf::StampedTransform(transform, odomAftMapped.header.stamp, "camera_init", "base_link"));
 }
 
 

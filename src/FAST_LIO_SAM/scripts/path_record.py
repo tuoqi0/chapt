@@ -28,9 +28,11 @@ class PathManager:
         
         # 路径数据结构
         self.path = Path()
-        self.path.header.frame_id = "map"
+        self.path.header.frame_id = "camera_init"  # 初始坐标系
+        self.path.header.stamp = rospy.Time.now()
         self.smoothed_path = Path()
-        self.smoothed_path.header.frame_id = "map"
+        self.smoothed_path.header.frame_id = "camera_init"  # 初始坐标系
+        self.smoothed_path.header.stamp = rospy.Time.now()
         
         # 发布器
         self.raw_path_pub = rospy.Publisher('/raw_path', Path, queue_size=10, latch=True)
@@ -52,7 +54,7 @@ class PathManager:
         self.toggle_mode_service = rospy.Service('/toggle_mode', SetBool, self.handle_toggle_mode)
         
         # 保存路径目录
-        self.save_dir = os.path.join(os.path.expanduser("/home/tuo/"), "saved_paths")
+        self.save_dir = os.path.join(os.path.expanduser("/home/toe/"), "saved_paths")
         os.makedirs(self.save_dir, exist_ok=True)
         
         # 状态变量
@@ -65,6 +67,11 @@ class PathManager:
         self.current_region_index = 0  # 当前区域索引
         self.current_goal_index = 0  # 当前目标点索引
         self.front_distance = 0.0  # 前方障碍物距离
+        self.is_recording = False  # 是否处于记录模式
+        # 添加点状态
+        self.add_point_count = 0  # 记录/add_point服务调用次数
+        self.origin_point = None  # 存储第一次调用的原点
+        
         # 定义区域边界（x轴范围）
         self.region_boundaries = {
             "竖杆":  (0.0, 7.0),
@@ -109,34 +116,36 @@ class PathManager:
             d += 2 * math.pi
         return d
 
-    def add_point_to_path(self, x, y, frame_id="map"):
+    def add_point_to_path(self, x, y, frame_id="camera_init"):
         """添加点到路径"""
         # 如果是第一个点，设置为起点
         if len(self.path.poses) == 0 and self.robot_position:
             start_pose = PoseStamped()
             start_pose.header.frame_id = frame_id
-            start_pose.pose.position.x = self.robot_position[1]
+            start_pose.pose.position.x = self.robot_position[1]  # 使用新的x坐标（原始z值）
             start_pose.pose.position.y = 0.0
-            start_pose.pose.position.z = self.robot_position[0]
+            start_pose.pose.position.z = self.robot_position[0]  # 使用新的z坐标（原始x值）
             start_pose.pose.orientation.w = 1.0
             self.path.poses.append(start_pose)
             rospy.loginfo(f"已设定路径起点为当前位置: x={self.robot_position[0]:.2f}, y={self.robot_position[1]:.2f}")
-            self.current_goal_index = 0 
-        
+            self.current_goal_index = 0
+
         # 添加目标点
         goal_pose = PoseStamped()
         goal_pose.header.frame_id = frame_id
         goal_pose.header.stamp = rospy.Time.now()
-        goal_pose.pose.position.x = y
-        goal_pose.pose.position.z = x
+        # 将输入的x作为新的z坐标，y作为新的x坐标
+        goal_pose.pose.position.x = y  # 新坐标系中的x坐标
+        goal_pose.pose.position.z = x  # 新坐标系中的z坐标
         goal_pose.pose.position.y = 0.0
         goal_pose.pose.orientation.w = 1.0
         self.path.poses.append(goal_pose)
         self.path.header.stamp = rospy.Time.now()
-        self.goal_position = (x, y)  # 更新最终目标点
+        # 存储目标点：新坐标系中的(x, z) = (y, x)
+        self.goal_position = (x, y)
         self.raw_path_pub.publish(self.path)
 
-        rospy.loginfo(f"添加目标点: x={x:.2f}, y={y:.2f}")
+        rospy.loginfo(f"添加目标点: x={x:.2f}, z={y:.2f}")
         self.visualize_path()
    
     def point_callback(self, msg):
@@ -144,15 +153,16 @@ class PathManager:
         if self.mode != "click":
             return
             
-        if msg.header.frame_id != "map":
-            rospy.logwarn(f"点坐标系 {msg.header.frame_id} 不是'map'，已忽略")
+        if msg.header.frame_id != "camera_init":
+            rospy.logwarn(f"点坐标系 {msg.header.frame_id} 不是'camera_init'，已忽略")
             return
 
         if not self.robot_position and len(self.path.poses) == 0:
             rospy.logwarn("未收到机器人当前位置，无法设定起点")
             return
 
-        self.add_point_to_path(msg.point.x, msg.point.y, msg.header.frame_id)
+        # 添加点时，传入的x作为新坐标系的z，y作为新坐标系的x
+        self.add_point_to_path(msg.point.z, msg.point.x, msg.header.frame_id)
 
     def check_region(self, x):
         """检查机器人所在的区域(基于x坐标)"""
@@ -174,12 +184,9 @@ class PathManager:
             
     def odom_callback(self, msg):
         """处理里程计消息"""
-        # 更新机器人位置
-        raw_x = msg.pose.pose.position.z
-        raw_y = msg.pose.pose.position.x
-        transformed_x = raw_x
-        transformed_y = raw_y
-        self.robot_position = (transformed_x, transformed_y)        
+        new_x = msg.pose.pose.position.z  # 原始z作为新x
+        new_y = msg.pose.pose.position.x  # 原始x作为新z
+        self.robot_position = (new_x, new_y)  # 新坐标系中的(x, z)位置
         
         # 更新偏航角
         quat = (
@@ -192,7 +199,7 @@ class PathManager:
         
         # 记录模式：自动记录路径点
         if self.is_recording:
-            current_pos = (transformed_x, transformed_y)
+            current_pos = (new_x, new_y)
             
             # 检查是否是新点（距离上一个点足够远）
             if self.last_recorded_point:
@@ -205,10 +212,10 @@ class PathManager:
             
             # 记录新点
             pose = PoseStamped()
-            pose.header.frame_id = "map"
+            pose.header.frame_id = "camera_init"  # 使用初始坐标系
             pose.header.stamp = rospy.Time.now()
-            pose.pose.position.x = current_pos[1]  # 注意：x和y的顺序
-            pose.pose.position.z= current_pos[0]
+            pose.pose.position.z = current_pos[0]  
+            pose.pose.position.x = current_pos[1]  
             pose.pose.position.y = 0.0
             pose.pose.orientation.w = 1.0
             self.path.poses.append(pose)
@@ -230,7 +237,7 @@ class PathManager:
             if self.current_goal_index >= len(self.path.poses):
                 self.current_goal_index = len(self.path.poses) - 1
                 rospy.logwarn(f"目标索引超出范围，重置为最后一点: {self.current_goal_index}")
-              # 检查当前区域
+              # 检查当前区域 - 使用新坐标系中的x坐标
             self.current_region = self.check_region(self.robot_position[0])
             self.current_region_index=self.region_index_map.get(self.current_region, 0)
         # 获取前方区域边界距离
@@ -240,25 +247,26 @@ class PathManager:
             # 获取当前目标点位置
             current_goal_pose = self.path.poses[self.current_goal_index]
             goal_pos = current_goal_pose.pose.position
-            goal_position = (goal_pos.x, goal_pos.y)
-            
+            # 目标点位置：新坐标系中的(z, x)
+            goal_position = (goal_pos.z, goal_pos.x)
+
             # 计算到当前目标点的距离
-            goal_dx = goal_position[0] - self.robot_position[0]
-            goal_dy = self.robot_position[1] - goal_position[1]
-            distance_to_goal = math.hypot(goal_dx, goal_dy)
+            goal_dz = goal_position[0] - self.robot_position[0]  # z方向差值
+            goal_dx = goal_position[1] - self.robot_position[1]  # x方向差值
+            distance_to_goal = math.hypot(goal_dz, goal_dx)
             
-            # 如果接近当前目标点，切换到下一个目标点
+                       # 如果接近当前目标点，切换到下一个目标点
             if self.current_region_index != 4:
-                if goal_dx < 0.1 and abs(goal_dy) < 0.1:
+                if abs(goal_dz) < 0.25 and abs(goal_dx) < 0.15:
                     if self.current_goal_index < len(self.path.poses) - 1:
                         self.current_goal_index += 1
                         new_goal = self.path.poses[self.current_goal_index].pose.position
                         rospy.loginfo(f"切换到下一个目标点: {self.current_goal_index}/{len(self.path.poses)-1} "
-                                  f"({new_goal.x:.2f}, {new_goal.y:.2f})")
+                                  f"({new_goal.z:.2f}, {new_goal.x:.2f})")
                     else:
                         rospy.loginfo("已到达最终目标点!")
             else: 
-                if goal_dx < 0.05 and abs(goal_dy) < 0.05:
+                if goal_dz < 0.05 and abs(goal_dx) < 0.05:
                     if self.current_goal_index < len(self.path.poses) - 1:
                         self.current_goal_index += 1
                         new_goal = self.path.poses[self.current_goal_index].pose.position
@@ -269,16 +277,16 @@ class PathManager:
             # 获取当前目标点（可能已更新）
             current_goal_pose = self.path.poses[self.current_goal_index]
             goal_pos = current_goal_pose.pose.position
-            self.goal_position = (goal_pos.x, goal_pos.y)
+            self.goal_position = (goal_pos.z, goal_pos.x)
             
             # 重新计算到当前目标点的向量
-            goal_dx = self.goal_position[0] - self.robot_position[0]
-            goal_dy = self.robot_position[1] - self.goal_position[1]
-            distance_to_goal = math.hypot(goal_dx, goal_dy)
+            goal_dz = self.goal_position[0] - self.robot_position[0]
+            goal_dx = self.goal_position[1] - self.robot_position[1]
+            distance_to_goal = math.hypot(goal_dz, goal_dx)
             if self.current_goal_index > 0:
                 # 正常情况：使用上一个目标点和当前目标点形成的路径段
                 prev_goal_pose = self.path.poses[self.current_goal_index - 1]
-                A = (prev_goal_pose.pose.position.x, prev_goal_pose.pose.position.y)
+                A = (prev_goal_pose.pose.position.z, prev_goal_pose.pose.position.x)
                 B = self.goal_position
             else:
                 # 当处于第一个目标点时：使用原点和当前目标点形成的路径段
@@ -293,47 +301,35 @@ class PathManager:
             path_length = math.hypot(path_vector[0], path_vector[1])
             
             if path_length > 1e-6:  # 避免除以零
-                
                 # 使用叉积计算横向偏移 (带符号)
-                if self.current_region_index != 6:  # 匍匐架区域特殊处理
-                    lateral_distance = -goal_dy  # 竖杆区域，直接使用y坐标差
-                else:
-                    cross_product = path_vector[0] * robot_vector[1] - path_vector[1] * robot_vector[0]
-                    lateral_distance = cross_product / path_length
+                lateral_distance = goal_dx
             else:
                 lateral_distance = 0.0
 
-            goal_heading = math.atan2(goal_dy, goal_dx)
+            goal_heading = math.atan2(goal_dx, goal_dz)
             
             # 计算航向偏差（机器人当前朝向与目标方向的角度差）  
-            if self.current_region_index != 8:  # 匍匐架区域特殊处理
-
-                goal_heading_error = self.angle_diff(self.robot_yaw, 0.0)
-                heading_error_deg = math.degrees(goal_heading_error)
-                if heading_error_deg < -180:
-                    heading_error_deg += 360
-            else:    
-                goal_heading_error = self.angle_diff(goal_heading, self.robot_yaw)
-                heading_error_deg = math.degrees(goal_heading_error)
-                if heading_error_deg < -180:
-                    heading_error_deg += 360
+            goal_heading_error = self.angle_diff(self.robot_yaw,0)
+            heading_error_deg = math.degrees(goal_heading_error)
+            if heading_error_deg < -180:
+                heading_error_deg += 360
 
             rospy.loginfo_throttle(0.1,
-                f"当前位置: ({self.robot_position[0]:.2f}, {self.robot_position[1]:.2f}) | "
-                f"目标点: ({goal_pos.x:.2f}, {goal_pos.y:.2f}) | "    
+                f"当前位置: x={self.robot_position[0]:.2f}, y={self.robot_position[1]:.2f} | "
+                f"目标点: x={goal_pos.z:.2f}, y={goal_pos.x:.2f} | "    
                 f"目标点 {self.current_goal_index}/{len(self.path.poses)-1} → "
-                f"距离={goal_dx:.2f}m | 横向偏移={lateral_distance:.2f}m | 航向偏差={heading_error_deg:.1f}°"
+                f"距离={goal_dz:.2f}m | 横向偏移={goal_dx:.2f}m | 航向偏差={heading_error_deg:.1f}°"
                 f" | 前方边界距离={front_boundary_distance:.2f}m | "
                 f"当前区域: {self.current_region} (索引: {self.current_region_index}) | "
                 )
 
             # 发布目标点信息
             data = [
-                float(goal_dx),           # 到当前目标点的y方向距离
-                float(lateral_distance),   # 横向偏移距离
+                float(goal_dz),       
+                float(goal_dx),        
                 float(heading_error_deg),  # 航向偏差
-                float(front_boundary_distance),  # 到区域前方y轴边界距离
-                float(self.current_region_index),  # 区域索
+                float(front_boundary_distance),  # 到区域前方边界距离
+                float(self.current_region_index),  # 区域索引
             ]
             
             # 创建并发布消息
@@ -347,10 +343,10 @@ class PathManager:
             return False
             
         try:
-            # 提取路径点
+            # 提取路径点 - 使用新坐标系中的x和z坐标
             points = []
             for pose in self.path.poses:
-                points.append([pose.pose.position.x, pose.pose.position.y])
+                points.append([pose.pose.position.z, pose.pose.position.x])
             
             # 转换为NumPy数组
             points = np.array(points)
@@ -358,19 +354,19 @@ class PathManager:
             # 样条曲线平滑
             tck, u = splprep(points.T, u=None, s=self.smooth_factor, per=0) 
             u_new = np.linspace(u.min(), u.max(), 100)
-            x_new, y_new = splev(u_new, tck, der=0)
+            x_new, z_new = splev(u_new, tck, der=0)
             
             # 创建平滑路径
             self.smoothed_path = Path()
-            self.smoothed_path.header.frame_id = "map"
+            self.smoothed_path.header.frame_id = "camera_init"  # 使用初始坐标系
             self.smoothed_path.header.stamp = rospy.Time.now()
             
             for i in range(len(x_new)):
                 pose = PoseStamped()
-                pose.header.frame_id = "map"
+                pose.header.frame_id = "camera_init"
                 pose.header.stamp = rospy.Time.now()
                 pose.pose.position.x = x_new[i]
-                pose.pose.position.z = y_new[i]
+                pose.pose.position.z = z_new[i]
                 pose.pose.position.y = 0.0
                 pose.pose.orientation.w = 1.0
                 self.smoothed_path.poses.append(pose)
@@ -389,7 +385,7 @@ class PathManager:
         # 可视化原始路径
         if len(self.path.poses) >= 2:
             marker_raw = Marker()
-            marker_raw.header.frame_id = "map"
+            marker_raw.header.frame_id = "camera_init"  # 使用初始坐标系
             marker_raw.header.stamp = rospy.Time.now()
             marker_raw.ns = "raw_path"
             marker_raw.id = 0
@@ -404,9 +400,9 @@ class PathManager:
             # 按顺序添加点
             for pose in self.path.poses:
                 point = Point()
-                point.x = pose.pose.position.x
-                point.y = pose.pose.position.y
-                point.z = 0.0
+                point.x = pose.pose.position.x  # 新坐标系中的x
+                point.z = pose.pose.position.z  # 新坐标系中的z
+                point.y = 0.0
                 marker_raw.points.append(point)
                 
             self.marker_pub.publish(marker_raw)
@@ -414,7 +410,7 @@ class PathManager:
         # 可视化平滑路径
         if len(self.smoothed_path.poses) >= 2:
             marker_smooth = Marker()
-            marker_smooth.header.frame_id = "map"
+            marker_smooth.header.frame_id = "camera_init"  # 使用初始坐标系
             marker_smooth.header.stamp = rospy.Time.now()
             marker_smooth.ns = "smooth_path"
             marker_smooth.id = 1  # 使用不同的ID
@@ -429,9 +425,9 @@ class PathManager:
             # 按顺序添加点
             for pose in self.smoothed_path.poses:
                 point = Point()
-                point.x = pose.pose.position.x
-                point.y = pose.pose.position.y
-                point.z = 0.0
+                point.x = pose.pose.position.x  # 新坐标系中的x
+                point.z = pose.pose.position.z  # 新坐标系中的z
+                point.y = 0.0
                 marker_smooth.points.append(point)
                 
             self.marker_pub.publish(marker_smooth)
@@ -448,9 +444,9 @@ class PathManager:
                   converted_boundaries[k] = list(v)  # 元组转列表
         
             path_data = {
-                "frame_id": "map",
-                "points": [{"x": p.pose.position.x, "y": p.pose.position.y} for p in self.path.poses],
-                "smoothed_points": [{"x": p.pose.position.x, "y": p.pose.position.y} for p in self.smoothed_path.poses],
+                "frame_id": "camera_init",  # 初始坐标系
+                "points": [{"x": p.pose.position.z, "y": p.pose.position.x} for p in self.path.poses],  # 保存x和z
+                "smoothed_points": [{"x": p.pose.position.z, "y": p.pose.position.x} for p in self.smoothed_path.poses],  # 保存x和z
                 "lookahead_distance": self.lookahead_distance,
                 "min_distance": self.min_distance,
                 "smooth_factor": self.smooth_factor,
@@ -459,6 +455,8 @@ class PathManager:
                 "region_index_map": self.region_index_map
         }
         
+
+            
             with open(filepath, 'w') as f:
                 yaml.dump(path_data, f)
         
@@ -480,17 +478,17 @@ class PathManager:
         
         # 重置路径
             self.path = Path()
-            self.path.header.frame_id = "map"
+            self.path.header.frame_id = "camera_init"  # 初始坐标系
             self.smoothed_path = Path()
-            self.smoothed_path.header.frame_id = "map"
+            self.smoothed_path.header.frame_id = "camera_init"  # 初始坐标系
         
-        # 加载原始路径点
+        # 加载原始路径点 - 使用新坐标系中的x和z
             for point in path_data["points"]:
                 pose = PoseStamped()
-                pose.header.frame_id = "map"
-                pose.pose.position.x = point["x"]
-                pose.pose.position.y = point["y"]
-                pose.pose.position.z = 0.0
+                pose.header.frame_id = "camera_init"
+                pose.pose.position.x = point["y"]
+                pose.pose.position.z = point["x"]  # 加载z坐标
+                pose.pose.position.y = 0.0
                 pose.pose.orientation.w = 1.0
                 self.path.poses.append(pose)
         
@@ -498,10 +496,10 @@ class PathManager:
             if "smoothed_points" in path_data:
                 for point in path_data["smoothed_points"]:
                     pose = PoseStamped()
-                    pose.header.frame_id = "map"
-                    pose.pose.position.x = point["x"]
-                    pose.pose.position.y = point["y"]
-                    pose.pose.position.z = 0.0
+                    pose.header.frame_id = "camera_init"
+                    pose.pose.position.x = point["y"]
+                    pose.pose.position.z = point["x"]  # 加载z坐标
+                    pose.pose.position.y = 0.0
                     pose.pose.orientation.w = 1.0
                     self.smoothed_path.poses.append(pose)
         
@@ -531,8 +529,8 @@ class PathManager:
         # 设置最终目标点
             if self.path.poses:
                 last_point = self.path.poses[-1].pose.position
-                self.goal_position = (last_point.x, last_point.y)
-                rospy.loginfo(f"设置目标点为: ({last_point.x:.2f}, {last_point.y:.2f})")
+                self.goal_position = (last_point.z, last_point.x)  # 使用x和z
+                rospy.loginfo(f"设置目标点为: x={last_point.z:.2f}, y={last_point.x:.2f}")
         
         # 发布路径
             self.path.header.stamp = rospy.Time.now()
@@ -577,8 +575,44 @@ class PathManager:
     def handle_add_point(self, req):
         """处理手动添加点请求"""
         try:
-            self.add_point_to_path(req.x, req.y)
-            return AddPointResponse(True, f"点 ({req.x:.2f}, {req.y:.2f}) 添加成功")
+            self.add_point_count += 1
+            
+            if self.add_point_count == 1:
+                # 第二次调用：设置原点并添加矩形路径点
+                self.origin_point = (req.x, req.y)
+                rospy.loginfo(f"设置原点: x={req.x:.2f}, y={req.y:.2f}")
+                
+                # 预定义的矩形路径点（相对于原点）
+                rectangle_points = [
+                    (0.0, 0.0),
+                    (0.0, -0.40524542725114505),
+                    (1.40442701753153218, -0.40524542725114505),
+                    (1.40442701753153218, 0.40524542725114505),
+                    (2.60575327338704755, 0.40524542725114505),
+                    (2.60575327338704755, -0.40524542725114505),
+                    (3.80575327338704755, -0.40524542725114505),
+                    (3.80575327338704755, 0.40524542725114505),
+                    (5.04643440858409621, 0.40524542725114505),
+                    (5.04643440858409621, -0.40524542725114505),
+                    (6.20005154454545151, -0.40524542725114505),
+                    (6.20005154454545151, 0.40524542725114505)
+                    # (7.00005154454545151, 0.00996462652405100)
+                ]
+                
+                # 添加矩形路径点（相对原点偏移）
+                for dx, dy in rectangle_points:
+                    abs_x = self.origin_point[0] + dx
+                    abs_y = self.origin_point[1] + dy
+                    self.add_point_to_path(abs_x, abs_y)
+                
+                return AddPointResponse(True, f"以点({req.x:.2f}, {req.y:.2f})为原点添加了矩形路径")
+            
+            elif self.add_point_count == 2:
+                # 第一次调用：添加最终目标点
+                self.add_point_to_path(req.x, req.y)
+                self.add_point_count = 0  # 重置计数器
+                return AddPointResponse(True, f"添加最终目标点: x={req.x:.2f}, y={req.y:.2f}")
+            
         except Exception as e:
             return AddPointResponse(False, f"添加点失败: {str(e)}")
             
